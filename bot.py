@@ -1,78 +1,8 @@
 # Telegram Casino Bot
-import logging, random
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-
-BOT_TOKEN = "8786347236:AAF8ITVAoAh7qrN6i9h0_NoWMNAuPrGgKok"
-STARTING_BALANCE = 1000
-logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
-
-def get_balance(ctx): return ctx.user_data.setdefault("balance", STARTING_BALANCE)
-def add_balance(ctx, n): ctx.user_data["balance"] = get_balance(ctx) + n; return ctx.user_data["balance"]
-
-def main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Blackjack", callback_data="bj_menu")],
-        [InlineKeyboardButton("Coin Flip", callback_data="coin_menu")],
-        [InlineKeyboardButton("Balance",   callback_data="balance")],
-    ])
-
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    bal = get_balance(ctx)
-    txt = f"Casino!\n\nBalance: {bal}\n\nChoose:"
-    if update.message: await update.message.reply_text(txt, reply_markup=main_menu())
-    else: await update.callback_query.edit_message_text(txt, reply_markup=main_menu())
-
-async def show_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    await q.edit_message_text(f"Balance: {get_balance(ctx)}",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="menu")]]))
-
-RANKS=["2","3","4","5","6","7","8","9","10","J","Q","K","A"]
-SUITS=["S","H","D","C"]
-VAL={"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10,"J":10,"Q":10,"K":10,"A":11}
-
-def new_deck():
-    d=[(r,s) for r in RANKS for s in SUITS]; random.shuffle(d); return d
-
-def hval(h):
-    v=sum(VAL[r] for r,_ in h); a=sum(1 for r,_ in h if r=="A")
-    while v>21 and a: v-=10; a-=1
-    return v
-
-def hstr(h, hide=False):
-    if hide: return f"{h[0][0]}{h[0][1]} [?]"
-    return " ".join(f"{r}{s}" for r,s in h)
-
-BETS=[50,100,200,500]
-
-async def bj_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    bal=get_balance(ctx)
-    btns=[[InlineKeyboardButton(f"{b} coins", callback_data=f"bj_{b}")] for b in BETS if b<=bal]
-    btns.append([InlineKeyboardButton("Back", callback_data="menu")])
-    await q.edit_message_text(f"Blackjack\nBalance: {bal}\nBet:", reply_markup=InlineKeyboardMarkup(btns))
-
-async def bj_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    bet=int(q.data.split("_")[1])
-    if bet>get_balance(ctx): await q.answer("Not enough!", show_alert=True); return
-    add_balance(ctx,-bet); ctx.user_data["bet"]=bet
-    dk=new_deck(); pl=[dk.pop(),dk.pop()]; dl=[dk.pop(),dk.pop()]
-    ctx.user_data.update({"dk":dk,"pl":pl,"dl":dl})
-    if hval(pl)==21: await bj_end(q,ctx); return
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("Hit",callback_data="bj_hit"),InlineKeyboardButton("Stand",callback_data="bj_stand")]])
-    await q.edit_message_text(f"Bet:{bet} Bal:{get_balance(ctx)}\nYou: {hstr(pl)} ({hval(pl)})\nDealer: {hstr(dl,True)}",reply_markup=kb)
-
-async def bj_hit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    ctx.user_data["pl"].append(ctx.user_data["dk"].pop())
-    pl=ctx.user_data["pl"]; bet=ctx.user_data["bet"]
-    if hval(pl)>=21: await bj_end(q,ctx); return
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("Hit",callback_data="bj_hit"),InlineKeyboardButton("Stand",callback_data="bj_stand")]])
-# Telegram Casino Bot
 import logging
 import random
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -86,6 +16,23 @@ STARTING_BALANCE = 10000
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 
+
+# ── HTTP-СЕРВЕР ДЛЯ RENDER ────────────────────────────────────
+
+class PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, *args):
+        pass  # отключить логи
+
+def run_server():
+    server = HTTPServer(("0.0.0.0", 10000), PingHandler)
+    server.serve_forever()
+
+
+# ── БАЛАНС ────────────────────────────────────────────────────
 
 def get_balance(context):
     return context.user_data.setdefault("balance", STARTING_BALANCE)
@@ -334,16 +281,16 @@ async def coin_flip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data
-    if   data == "main_menu":               await start(update, context)
-    elif data == "show_balance":            await show_balance(update, context)
-    elif data == "bj_bet_menu":             await bj_bet_menu(update, context)
-    elif data.startswith("bj_bet_"):        await bj_start(update, context)
-    elif data == "bj_hit":                  await bj_hit(update, context)
-    elif data == "bj_stand":               await bj_stand(update, context)
-    elif data == "bj_double":              await bj_double(update, context)
-    elif data == "coin_bet_menu":           await coin_bet_menu(update, context)
-    elif data.startswith("coin_bet_"):      await coin_set_bet(update, context)
-    elif data in ("coin_heads","coin_tails"): await coin_flip(update, context)
+    if   data == "main_menu":                  await start(update, context)
+    elif data == "show_balance":               await show_balance(update, context)
+    elif data == "bj_bet_menu":                await bj_bet_menu(update, context)
+    elif data.startswith("bj_bet_"):           await bj_start(update, context)
+    elif data == "bj_hit":                     await bj_hit(update, context)
+    elif data == "bj_stand":                   await bj_stand(update, context)
+    elif data == "bj_double":                  await bj_double(update, context)
+    elif data == "coin_bet_menu":              await coin_bet_menu(update, context)
+    elif data.startswith("coin_bet_"):         await coin_set_bet(update, context)
+    elif data in ("coin_heads", "coin_tails"): await coin_flip(update, context)
 
 
 # ── ЗАПУСК ────────────────────────────────────────────────────
@@ -352,7 +299,9 @@ def main():
     import asyncio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
+    threading.Thread(target=run_server, daemon=True).start()
+
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(router))

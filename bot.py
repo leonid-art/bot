@@ -349,6 +349,10 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── ЗАПУСК ────────────────────────────────────────────────────
 
 def main():
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(router))
@@ -356,9 +360,4 @@ def main():
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    import traceback
-    try:
-        main()
-    except Exception as e:
-        print("ОШИБКА:", e)
-        traceback.print_exc()
+    main()
